@@ -1,0 +1,131 @@
+#!/bin/bash -e
+
+# Set timezone
+: ${TZ?"Need to set TZ, see http://php.net/manual/en/timezones.php for supported timezones."}
+sed -i "s#;date.timezone =#date.timezone = $TZ#g" /etc/php/7.0/apache2/php.ini
+
+# Search for config files, if they don't exist, copy the default ones
+if [ ! -f /config/zm.conf ]; then
+	echo "Copying zm.conf"
+	cp /etc/zm/zm.conf /config/zm.conf
+else
+	echo "File zm.conf already exists"
+fi
+
+# Move ssmtp configuration if it doesn't exist
+if [ ! -d /config/ssmtp ]; then
+	echo "Moving ssmtp to config folder"
+	cp -p -R /etc/ssmtp/ /config/
+else
+	echo "Using existing ssmtp configuration"
+fi
+
+# Move mysql database if it doesn't exit
+if [ ! -d /config/mysql/mysql ]; then
+        echo "Initializing database"
+        service mysql start
+        mysql -uroot < /usr/share/zoneminder/db/zm_create.sql
+        mysql -uroot -e "grant all on zm.* to 'zmuser'@localhost identified by 'zmpass';"
+        service mysql stop
+	echo "Moving mysql to config folder"
+	rm -rf /config/mysql
+	cp -p -R /var/lib/mysql /config/
+else
+	echo "Using existing mysql database"
+fi
+
+# Move skins folder if it doesn't exist
+if [ ! -d /config/skins ]; then
+	echo "Moving skins folder to config folder"
+	mkdir /config/skins
+	cp -R -p /usr/share/zoneminder/www/skins /config/
+else
+	echo "Using existing skins directory"
+fi
+
+# Create Control folder if it doesn't exist and copy files into image
+if [ ! -d /config/control ]; then
+	echo "Creating control folder in config folder"
+	mkdir /config/control
+else
+	if [ -f /config/control/* ]; then
+		echo "Copy /config/control scripts to /usr/share/perl5/ZoneMinder/Control"
+		chmod 644 /config/control/*
+		cp /config/control/* /usr/share/perl5/ZoneMinder/Control 2>/dev/null
+	fi
+fi
+
+echo "Creating symbolink links"
+# ssmtp
+rm -r /etc/ssmtp
+ln -s /config/ssmtp /etc/ssmtp
+
+# mysql
+rm -r /var/lib/mysql
+ln -s /config/mysql /var/lib/mysql
+
+# zm.conf
+rm -r /etc/zm/zm.conf
+ln -sf /config/zm.conf /etc/zm/
+
+# skins
+rm -r /usr/share/zoneminder/www/skins
+ln -s /config/skins /usr/share/zoneminder/www/skins
+
+# Change some ownership and permissions
+chown -R mysql:mysql /config/mysql
+chown -R mysql:mysql /var/lib/mysql
+chmod 666 /config/zm.conf
+chmod 777 /config/control
+
+# Create event folder
+if [ ! -d /var/cache/zoneminder/events ]; then
+	echo "Create events folder"
+	mkdir /var/cache/zoneminder/events
+else
+	echo "Using existing data directory for events"
+fi
+
+# Create images folder
+if [ ! -d /var/cache/zoneminder/images ]; then
+	echo "Create images folder"
+	mkdir /var/cache/zoneminder/images
+else
+	echo "Using existing data directory for images"
+fi
+
+# Create temp folder
+if [ ! -d /var/cache/zoneminder/temp ]; then
+	echo "Create temp folder"
+	mkdir /var/cache/zoneminder/temp
+else
+	echo "Using existing data directory for temp"
+fi
+
+# Check the ownership on the /var/cache/zoneminder directory
+if [ `stat -c '%U:%G' /var/cache/zoneminder` != 'root:www-data' ]; then
+	echo "Correcting /var/cache/zoneminder ownership..."
+	chown -R root:www-data /var/cache/zoneminder
+fi
+
+# Check the permissions on the /var/cache/zoneminder directory
+if [ `stat -c '%a' /var/cache/zoneminder/events/` != '777' ]; then
+	echo "Correcting /var/cache/zoneminder permissions..."
+	chmod -R go+rw /var/cache/zoneminder
+fi
+
+# Fix memory issue
+echo "Setting shared memory to : $SHMEM of `awk '/MemTotal/ {print $2}' /proc/meminfo` bytes"
+umount /dev/shm
+mount -t tmpfs -o rw,nosuid,nodev,noexec,relatime,size=${SHMEM} tmpfs /dev/shm
+
+echo "Starting services"
+service mysql start
+
+# Update the database if necessary
+zmupdate.pl -nointeractive
+zmupdate.pl -f
+
+service zoneminder start
+service apache2 start
+tail -f /var/log/apache2/access.log
