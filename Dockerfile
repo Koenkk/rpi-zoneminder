@@ -20,7 +20,9 @@ RUN sed -i s/'character-set-server  = utf8mb4'/'character-set-server = latin1'/g
 RUN sed -i s/'collation-server      = utf8mb4_general_ci'/'collation-server = latin1_swedish_ci'/g /etc/mysql/my.cnf
 
 # Install and configure Zoneminder
-RUN apt install zoneminder vlc-plugin-base -y
+RUN echo "deb http://ftp.debian.org/debian stretch-backports main" >> /etc/apt/sources.list
+RUN apt-get update
+RUN apt-get -t stretch-backports install zoneminder=1.30.4*
 RUN chmod 740 /etc/zm/zm.conf
 RUN chown root:www-data /etc/zm/zm.conf
 RUN chown -R www-data:www-data /usr/share/zoneminder/
